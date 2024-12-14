@@ -28,8 +28,8 @@ void setup() {
     // ranges from 0-0xFF
     // LoRa.setSyncWord(0xF3);
     Serial.println("LoRa Initializing OK!");
-    xTaskCreatePinnedToCore(LoRaTask, "thingsBoardTask", 10000, NULL, 1, NULL, 1);    // Executa no núcleo APP (Core 1)
-    xTaskCreatePinnedToCore(ThingsBoardTask, "autoOpTask", 10000, NULL, 1, NULL, 0);  // Executa no núcleo PRO (Core 0)
+    xTaskCreatePinnedToCore(LoRaTask, "LoRaTask", 10000, NULL, 1, NULL, 1);    // Executa no núcleo APP (Core 1)
+    xTaskCreatePinnedToCore(ThingsBoardTask, "ThingsBoardTask", 10000, NULL, 1, NULL, 0);  // Executa no núcleo PRO (Core 0)
     Serial.println("Finish Setup");
 }
 void loop() { vTaskSuspend(NULL); }
