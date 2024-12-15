@@ -8,7 +8,9 @@
 
 #include "cJSON.h"
 #include "conf.h"
+#include "esp_task_wdt.h"
 #include "myFS.h"
+#include "utils.h"
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -37,11 +39,17 @@ void setup() {
     // initialize Serial Monitor
     Serial.begin(115200);
     Serial.println("Init Setup");
-    xTaskCreatePinnedToCore(LoRaTask, "LoRaTask", 10000, NULL, 1, NULL, 1);  // Executa no núcleo APP (Core 1)
-    // xTaskCreatePinnedToCore(ThingsBoardTask, "ThingsBoardTask", 10000, NULL, 1, NULL, 0);  // Executa no núcleo PRO (Core 0)
+    if (!LittleFS.begin(FORMAT_LITTLEFS_IF_FAILED)) {
+        Serial.println("LittleFS Mount Failed");
+        return;
+    }
+    // xTaskCreatePinnedToCore(LoRaTask, "LoRaTask", 10000, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(ThingsBoardTask, "ThingsBoardTask", 10000, NULL, 1, NULL, APP_CPU_NUM);  // Executa no núcleo PRO (Core 1)
     Serial.println("Finish Setup");
 }
 void loop() { vTaskSuspend(NULL); }
+bool recMsgFlag = false;
+bool loRaTaskStarted = false;
 void LoRaTask(void *pvParameters) {
     // setup LoRa transceiver module
     LoRa.setPins(ss, rst, dio0);
@@ -62,11 +70,15 @@ void LoRaTask(void *pvParameters) {
                 LoRaData = LoRa.readString();
                 Serial.print("Msg recebido: ");
                 Serial.println(LoRaData);
+                recMsgFlag = true;
+#if DebugLoRa
                 Serial.print("Msg processada: ");
                 Serial.println(handleLoRaMessage(LoRaData));
+#endif
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -76,17 +88,58 @@ void ThingsBoardTask(void *pvParameters) {
     _timeClient.update();
     manageMQTT();
     while (1) {
+        String LoRaMsg, toGo;
+        esp_task_wdt_reset();
         manageWiFi();
         if (!client.connected()) {
             manageMQTT();
         } else {
             client.loop();
             _timeClient.update();
-            if (millis() - t[0] > retornaSegundo(30)) {
+            // if (millis() - t[0] > retornaSegundo(30)) {
+            //     LoRaMsg = handleLoRaMessage(LoRaData);
+            //     Serial.print("LoRaMsg: ");
+            //     Serial.println(LoRaMsg);
+            //     toGo = addTimeToJSON(LoRaMsg, _timeClient.getFormattedTime());
+            //     Serial.print("toGo: ");
+            //     Serial.println(toGo);
+            //     if (publishToMqtt(toGo)) {
+            //         Serial.printf("[SUCESSO]\nMensagem: %s\n", toGo);
+            //     } else {
+            //         Serial.printf("[FALHOU]\nMensagem: %s\n", toGo);
+            //     }
+            //     recMsgFlag = false;
+            //     t[0] = millis();
+            // }
+            if (recMsgFlag) {
+                LoRaMsg = handleLoRaMessage(LoRaData);
+                toGo = addTimeToJSON(LoRaMsg, _timeClient.getFormattedTime());
+#if DebugLoRa
+                Serial.print("LoRaMsg: ");
+                Serial.println(LoRaMsg);
+                Serial.print("toGo: ");
+                Serial.println(toGo);
+#endif
+                if (publishToMqtt(toGo)) {
+                    Serial.print("[SUCESSO]");
+                    Serial.print("toGo: ");
+                    Serial.println(toGo);
+                } else {
+                    Serial.print("[FALHOU]");
+                    Serial.print("toGo: ");
+                    Serial.println(toGo);
+                }
+                recMsgFlag = false;
             }
+        }
+        // Verificar se LoRaTask deve ser iniciado
+        if (!loRaTaskStarted) {
+            xTaskCreatePinnedToCore(LoRaTask, "LoRaTask", 10000, NULL, 1, NULL, PRO_CPU_NUM);  // Executa no núcleo PRO (Core 0)
+            loRaTaskStarted = true;                                                            // Setar a flag após iniciar a tarefa
         }
     }
 }
+
 void manageWiFi() {
     if (WiFi.status() != WL_CONNECTED) {
         connectToWifi();
@@ -103,6 +156,7 @@ void manageMQTT() {
 void reconnectMQTT() {
     int contadorMQTT = 0;
     while (!client.connected() && contadorMQTT < 15) {
+        esp_task_wdt_reset();
         Serial.print("Tentando conectar ao MQTT...");
         if (client.connect("ESP32Client", BombaTarget, NULL)) {
             Serial.println("Conectado");
@@ -113,10 +167,12 @@ void reconnectMQTT() {
             Serial.print(client.state());
             Serial.println(" tente novamente em 5 segundos");
             delay(5000);
+            esp_task_wdt_reset();
             contadorMQTT++;
         }
     }
 }
+
 bool connectToWifi() {
     int maxAttemptsPerNetwork = MAX_ATTEMPTS;
     bool notConnected = true;
@@ -138,10 +194,11 @@ bool connectToWifi() {
     int networkCount = cJSON_GetArraySize(networks);
     Serial.print("networkCount: ");
     Serial.println(networkCount);
-    WiFi.mode(WIFI_MODE_STA);
+    // WiFi.mode(WIFI_MODE_STA);
     std::string ssid_str, pwd_str;
     // Itera sobre as redes para garantir que os dados estejam corretos
     for (int i = 0; i < networkCount; i++) {
+        esp_task_wdt_reset();
         int contador = 0;
         cJSON *network = cJSON_GetArrayItem(networks, i);
         if (cJSON_IsObject(network)) {
@@ -163,6 +220,7 @@ bool connectToWifi() {
                     Serial.print(".");
                     contador++;
                     vTaskDelay(pdMS_TO_TICKS(500));
+                    esp_task_wdt_reset();
                 }
                 if (WiFi.status() == WL_CONNECTED) {
                     Serial.println();
@@ -184,41 +242,4 @@ bool connectToWifi() {
     return false;  // Isso nunca será executado devido ao ESP.restart()
 }
 
-String handleLoRaMessage(String LoRaInMessage) {
-    // Criar um objeto JSON com cJSON
-    cJSON *root = cJSON_CreateObject();
-    if (root == NULL) {
-        Serial.println("Erro ao criar o objeto JSON");
-    }
-    // Separar a mensagem em pares `id_valor` usando o delimitador `;`
-    int start = 0, end;
-    while ((end = LoRaInMessage.indexOf(';', start)) != -1) {
-        String pair = LoRaInMessage.substring(start, end);
-        // Dividir o par `id_valor` em chave e valor
-        int separatorIndex = pair.indexOf('_');
-        if (separatorIndex != -1) {
-            String key = pair.substring(0, separatorIndex);
-            String value = pair.substring(separatorIndex + 1);
-            // Converter para float e limitar a 2 casas decimais
-            float rawValue = value.toFloat();
-            float roundedValue = round(rawValue * 100) / 100.0;
-
-            // Adicionar ao JSON como par chave-valor
-            cJSON_AddNumberToObject(root, key.c_str(), roundedValue);
-        }
-        start = end + 1;  // Avançar para o próximo par
-    }
-    // Serializar o objeto JSON
-    char *jsonString = cJSON_PrintUnformatted(root);
-    if (jsonString == NULL) {
-        Serial.println("Erro ao serializar o JSON");
-        cJSON_Delete(root);
-    }
-    String ret = String(jsonString);
-    // Liberar memória
-    cJSON_free(jsonString);
-    cJSON_Delete(root);
-    return ret;
-}
-
-bool publishToMqtt(String toGo) { return client.publish("v1/devices/me/telemetry", toGo.c_str(), strlen(toGo.c_str())); }
+bool publishToMqtt(String toGo) { return client.publish("v1/devices/me/telemetry", toGo.c_str()); }

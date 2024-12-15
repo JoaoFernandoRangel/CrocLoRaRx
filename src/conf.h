@@ -7,6 +7,7 @@
 
 #if Bomba == 4
 #define BombaTarget LoRaGateway
+
 #elif Bomba == 3
 #define BombaTarget BombaJardim
 #elif Bomba == 2
@@ -20,12 +21,13 @@
 #define ss 5
 #define rst 14
 #define dio0 2
+#define DebugLoRa 0
 
 #define retornaSegundo(x) (1000 * (x))
 #define retornaMinuto(x) (60 * 1000 * (x))
 #define retornaHora(x) (60 * 60 * 1000 * (x))
 #define RelePin 27
-#define WiFi_LED 19
+#define WiFi_LED 33
 #define MAX_ATTEMPTS 10
 // Arquivos de configuração
 #define RedeData "/wifiData.JSON"
